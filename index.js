@@ -26,18 +26,27 @@ const supabase = createClient(
 // CONSTANTS
 // ─────────────────────────────────────────────
 const AFFILIATE_ID = "208330";
-const START_DATE = "2025-12-03";
-const SNAPSHOT_DATE = "1970-01-01";
+const SNAPSHOT_DATE = "1970-01-01"; // lifetime row
 const SPARK_ID_REGEX = /^SPK-\d{4}-\d{4}$/;
 
 // ─────────────────────────────────────────────
-// 🔒 CAKE-SAFE END DATE (NOW − 48 HOURS)
+// 🧠 CAKE-SAFE ROLLING 29-DAY WINDOW
+// - end = yesterday (completed day)
+// - start = end − 29 days
 // ─────────────────────────────────────────────
-const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
-const END_DATE = twoDaysAgo.toISOString().split("T")[0];
+const now = new Date();
+
+// yesterday (CAKE considers completed)
+const end = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+// 29-day window (CAKE max)
+const start = new Date(end.getTime() - 29 * 24 * 60 * 60 * 1000);
+
+const START_DATE = start.toISOString().split("T")[0];
+const END_DATE = end.toISOString().split("T")[0];
 
 // ─────────────────────────────────────────────
-// CAKE REQUEST (KNOWN-GOOD CONTRACT)
+// CAKE REQUEST (WINDOW-SAFE)
 // ─────────────────────────────────────────────
 const url =
   "https://login.affluentco.com/affiliates/api/Reports/SubAffiliateSummary" +
@@ -68,7 +77,8 @@ if (!Array.isArray(json.data)) {
 }
 
 // ─────────────────────────────────────────────
-// TRANSFORM → DB ROWS
+// TRANSFORM → LIFETIME ROWS
+// (Overwrite same snapshot each run)
 // ─────────────────────────────────────────────
 const rows = json.data
   .filter(
@@ -91,7 +101,7 @@ if (rows.length === 0) {
 }
 
 // ─────────────────────────────────────────────
-// UPSERT (user_id preserved)
+// UPSERT (user_id PRESERVED)
 // ─────────────────────────────────────────────
 const { error } = await supabase
   .from("cake_earnings_daily")
@@ -103,4 +113,7 @@ if (error) {
   throw error;
 }
 
-console.log(`✔ Synced ${rows.length} SPK lifetime rows`);
+console.log(
+  `✔ Synced ${rows.length} SPK lifetime rows ` +
+  `(window ${START_DATE} → ${END_DATE})`
+);
