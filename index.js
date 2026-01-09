@@ -30,19 +30,14 @@ const START_DATE = "2025-12-03";
 const SNAPSHOT_DATE = "1970-01-01";
 const SPARK_ID_REGEX = /^SPK-\d{4}-\d{4}$/;
 
-// yesterday (completed day)
-const now = new Date();
-const yesterday = new Date(
-  Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() - 1
-  )
-);
-const END_DATE = yesterday.toISOString().split("T")[0];
+// ─────────────────────────────────────────────
+// 🔒 CAKE-SAFE END DATE (NOW − 48 HOURS)
+// ─────────────────────────────────────────────
+const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+const END_DATE = twoDaysAgo.toISOString().split("T")[0];
 
 // ─────────────────────────────────────────────
-// CAKE REQUEST (EXACTLY WHAT WORKED)
+// CAKE REQUEST (KNOWN-GOOD CONTRACT)
 // ─────────────────────────────────────────────
 const url =
   "https://login.affluentco.com/affiliates/api/Reports/SubAffiliateSummary" +
