@@ -106,7 +106,7 @@ if (rows.length === 0) {
 const { error } = await supabase
   .from("cake_earnings_daily")
   .upsert(rows, {
-    onConflict: "cake_affiliate_id,date",
+    onConflict: "cake_affiliate_id",
   });
 
 if (error) {
