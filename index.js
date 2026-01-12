@@ -2,7 +2,7 @@ import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 
 // ─────────────────────────────────────────────
-// ENV VARS (SET IN RENDER)
+// ENV
 // ─────────────────────────────────────────────
 const {
   CAKE_API_KEY,
@@ -15,42 +15,39 @@ if (!CAKE_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 // ─────────────────────────────────────────────
-// SUPABASE (SERVICE ROLE)
+// SUPABASE
 // ─────────────────────────────────────────────
 const supabase = createClient(
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { autoRefreshToken: false, persistSession: false },
-  }
+  { auth: { autoRefreshToken: false, persistSession: false } }
 );
 
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
 const AFFILIATE_ID = "208330";
+const START_DATE = new Date("2025-12-01");
+const WINDOW_DAYS = 28;
+const SNAPSHOT_DATE = "2026-01-04";
+
 const SPARK_ID_REGEX = /^SPK-[A-Z0-9]{4}-[A-Z0-9]{4}$/i;
 
-const WINDOW_DAYS = 28;
-
-// Start of your system (CAKE-safe)
-const START_OF_TIME = new Date("2023-12-03");
-
-// CAKE only allows completed days → yesterday
-const TODAY = new Date();
-TODAY.setDate(TODAY.getDate() - 1);
+// yesterday only (CAKE completed data)
+const today = new Date();
+today.setDate(today.getDate() - 1);
 
 // ─────────────────────────────────────────────
-// DATE HELPERS
+// HELPERS
 // ─────────────────────────────────────────────
-function toISODate(d) {
+function toISO(d) {
   return d.toISOString().split("T")[0];
 }
 
-function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
+function addDays(d, days) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + days);
+  return x;
 }
 
 function minDate(a, b) {
@@ -58,94 +55,94 @@ function minDate(a, b) {
 }
 
 // ─────────────────────────────────────────────
-// MAIN SYNC
+// MAIN
 // ─────────────────────────────────────────────
-async function syncCakeAllTime() {
-  let cursor = new Date(START_OF_TIME);
+async function run() {
+  const totals = new Map();
 
-  while (cursor <= TODAY) {
+  let cursor = new Date(START_DATE);
+
+  while (cursor <= today) {
     const windowStart = new Date(cursor);
     const windowEnd = minDate(
       addDays(cursor, WINDOW_DAYS - 1),
-      TODAY
+      today
     );
-
-    const START_DATE = toISODate(windowStart);
-    const END_DATE = toISODate(windowEnd);
 
     const url =
       "https://login.affluentco.com/affiliates/api/Reports/SubAffiliateSummary" +
       `?api_key=${CAKE_API_KEY}` +
       `&affiliate_id=${AFFILIATE_ID}` +
-      `&start_date=${START_DATE}` +
-      `&end_date=${END_DATE}` +
+      `&start_date=${toISO(windowStart)}` +
+      `&end_date=${toISO(windowEnd)}` +
       `&format=json`;
 
-    console.log(`Fetching CAKE: ${START_DATE} → ${END_DATE}`);
+    console.log(`Fetching CAKE: ${toISO(windowStart)} → ${toISO(windowEnd)}`);
 
     const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "render-cron",
-      },
+      headers: { Accept: "application/json" },
     });
 
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`CAKE HTTP ${res.status}: ${text}`);
+      throw new Error(await res.text());
     }
 
     const json = await res.json();
 
-    if (!Array.isArray(json.data)) {
-      console.warn("Unexpected CAKE response shape, skipping window");
-      cursor = addDays(windowEnd, 1);
-      continue;
+    for (const r of json.data || []) {
+      if (!r.sub_id || !SPARK_ID_REGEX.test(String(r.sub_id))) continue;
+
+      const key = String(r.sub_id);
+
+      const prev = totals.get(key) || {
+        clicks: 0,
+        conversions: 0,
+        revenue: 0,
+        payout: 0,
+      };
+
+      totals.set(key, {
+        clicks: prev.clicks + Number(r.clicks ?? 0),
+        conversions: prev.conversions + Number(r.conversions ?? 0),
+        revenue: prev.revenue + Number(r.revenue ?? 0),
+        payout: prev.payout + Number(r.events ?? 0),
+      });
     }
 
-    const rows = json.data
-      .filter(
-        (r) =>
-          r.sub_id &&
-          SPARK_ID_REGEX.test(String(r.sub_id)) &&
-          r.date
-      )
-      .map((r) => ({
-        cake_affiliate_id: String(r.sub_id),
-        date: r.date,               // REAL DAILY DATE
-        clicks: Number(r.clicks ?? 0),
-        conversions: Number(r.conversions ?? 0),
-        revenue: Number(r.revenue ?? 0),
-        payout: Number(r.events ?? 0),
-      }));
-
-    if (rows.length > 0) {
-      const { error } = await supabase
-        .from("cake_earnings_daily")
-        .upsert(rows, {
-          onConflict: "cake_affiliate_id,date",
-        });
-
-      if (error) throw error;
-
-      console.log(`✔ Upserted ${rows.length} rows`);
-    } else {
-      console.log("No SPK rows in this window");
-    }
-
-    // Move to next window
     cursor = addDays(windowEnd, 1);
   }
 
-  console.log("✅ CAKE all-time sync complete");
+  if (!totals.size) {
+    console.log("No SPK rows found at all");
+    return;
+  }
+
+  const rows = Array.from(totals.entries()).map(
+    ([sparkId, v]) => ({
+      cake_affiliate_id: sparkId,
+      date: SNAPSHOT_DATE,
+      clicks: v.clicks,
+      conversions: v.conversions,
+      revenue: v.revenue,
+      payout: v.payout,
+    })
+  );
+
+  const { error } = await supabase
+    .from("cake_earnings_daily")
+    .upsert(rows, {
+      onConflict: "cake_affiliate_id,date",
+    });
+
+  if (error) throw error;
+
+  console.log(`✔ Synced ${rows.length} SPK lifetime rows`);
 }
 
-// ─────────────────────────────────────────────
-// RUN
-// ─────────────────────────────────────────────
-syncCakeAllTime()
+run()
   .then(() => process.exit(0))
-  .catch((err) => {
-    console.error("❌ CAKE sync failed:", err);
+  .catch(err => {
+    console.error("❌ Sync failed:", err);
     process.exit(1);
   });
+
