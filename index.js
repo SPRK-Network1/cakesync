@@ -92,12 +92,12 @@ async function syncCakeAllTime() {
 
     const rows = json.data
       .filter(
-        (r: any) =>
+        (r) =>
           r.sub_id &&
           SPARK_ID_REGEX.test(String(r.sub_id)) &&
           r.date
       )
-      .map((r: any) => ({
+      .map((r) => ({
         cake_affiliate_id: String(r.sub_id),
         date: r.date, // REAL daily date
         clicks: Number(r.clicks ?? 0),
@@ -122,7 +122,7 @@ async function syncCakeAllTime() {
       console.log("No SPK rows in this window");
     }
 
-    // move forward
+    // move window forward
     cursor = windowEnd.add(1, "day");
   }
 
