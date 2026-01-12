@@ -1,6 +1,5 @@
 import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
-import dayjs from "dayjs";
 
 // ─────────────────────────────────────────────
 // ENV VARS (SET IN RENDER)
@@ -16,16 +15,13 @@ if (!CAKE_API_KEY || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 // ─────────────────────────────────────────────
-// SUPABASE CLIENT (SERVICE ROLE)
+// SUPABASE (SERVICE ROLE)
 // ─────────────────────────────────────────────
 const supabase = createClient(
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
+    auth: { autoRefreshToken: false, persistSession: false },
   }
 );
 
@@ -35,30 +31,47 @@ const supabase = createClient(
 const AFFILIATE_ID = "208330";
 const SPARK_ID_REGEX = /^SPK-[A-Z0-9]{4}-[A-Z0-9]{4}$/i;
 
-// CAKE constraints
 const WINDOW_DAYS = 28;
 
-// First valid day of your system
-const START_OF_TIME = dayjs("2023-12-03");
+// Start of your system (CAKE-safe)
+const START_OF_TIME = new Date("2023-12-03");
 
 // CAKE only allows completed days → yesterday
-const TODAY = dayjs().subtract(1, "day");
+const TODAY = new Date();
+TODAY.setDate(TODAY.getDate() - 1);
 
 // ─────────────────────────────────────────────
-// MAIN SYNC FUNCTION
+// DATE HELPERS
+// ─────────────────────────────────────────────
+function toISODate(d) {
+  return d.toISOString().split("T")[0];
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function minDate(a, b) {
+  return a < b ? a : b;
+}
+
+// ─────────────────────────────────────────────
+// MAIN SYNC
 // ─────────────────────────────────────────────
 async function syncCakeAllTime() {
-  let cursor = START_OF_TIME.clone();
+  let cursor = new Date(START_OF_TIME);
 
-  while (cursor.isBefore(TODAY) || cursor.isSame(TODAY)) {
-    const windowStart = cursor;
-    const windowEnd = dayjs.min(
-      cursor.add(WINDOW_DAYS - 1, "day"),
+  while (cursor <= TODAY) {
+    const windowStart = new Date(cursor);
+    const windowEnd = minDate(
+      addDays(cursor, WINDOW_DAYS - 1),
       TODAY
     );
 
-    const START_DATE = windowStart.format("YYYY-MM-DD");
-    const END_DATE = windowEnd.format("YYYY-MM-DD");
+    const START_DATE = toISODate(windowStart);
+    const END_DATE = toISODate(windowEnd);
 
     const url =
       "https://login.affluentco.com/affiliates/api/Reports/SubAffiliateSummary" +
@@ -86,7 +99,7 @@ async function syncCakeAllTime() {
 
     if (!Array.isArray(json.data)) {
       console.warn("Unexpected CAKE response shape, skipping window");
-      cursor = windowEnd.add(1, "day");
+      cursor = addDays(windowEnd, 1);
       continue;
     }
 
@@ -99,7 +112,7 @@ async function syncCakeAllTime() {
       )
       .map((r) => ({
         cake_affiliate_id: String(r.sub_id),
-        date: r.date, // REAL daily date
+        date: r.date,               // REAL DAILY DATE
         clicks: Number(r.clicks ?? 0),
         conversions: Number(r.conversions ?? 0),
         revenue: Number(r.revenue ?? 0),
@@ -113,17 +126,15 @@ async function syncCakeAllTime() {
           onConflict: "cake_affiliate_id,date",
         });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       console.log(`✔ Upserted ${rows.length} rows`);
     } else {
       console.log("No SPK rows in this window");
     }
 
-    // move window forward
-    cursor = windowEnd.add(1, "day");
+    // Move to next window
+    cursor = addDays(windowEnd, 1);
   }
 
   console.log("✅ CAKE all-time sync complete");
